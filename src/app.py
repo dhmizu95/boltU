@@ -10,7 +10,7 @@ import gradio as gr
 import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
-from sample import enc, load_model
+from sample import decode_stream, enc, load_model
 
 _model_cache = {}  # checkpoint path -> (model, config); loaded lazily, kept warm
 
@@ -34,14 +34,21 @@ def stream_generate(prompt, checkpoint, temperature, top_k, top_p, max_new_token
     top_k = int(top_k) if top_k > 0 else None
     top_p = top_p if top_p < 1.0 else None
 
-    ids = enc.encode_ordinary(prompt)
-    idx = torch.tensor([ids], dtype=torch.long, device=device)
+    idx = torch.tensor([enc.encode_ordinary(prompt)], dtype=torch.long, device=device)
+    gen = model.generate(idx, int(max_new_tokens), temperature, top_k, top_p)
+
+    n = 0
+
+    def token_stream():
+        nonlocal n
+        for next_id, _ in gen:
+            n += 1
+            yield next_id.item()
+
     out_text = ""
     start = time.time()
-    n = 0
-    for next_id, idx in model.generate(idx, int(max_new_tokens), temperature, top_k, top_p):
-        out_text += enc.decode([next_id.item()])
-        n += 1
+    for chunk in decode_stream(token_stream()):
+        out_text += chunk
         elapsed = time.time() - start
         yield out_text, f"{n / elapsed:.1f} tok/s, {elapsed:.1f}s total"
 

@@ -14,9 +14,7 @@ import streamlit as st
 import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
-from sample import enc, load_model
-
-EOT_ID = 50256
+from sample import EOT_ID, decode_stream, enc, load_model
 
 st.set_page_config(page_title="boltU chat", page_icon="\U0001f4ac")
 
@@ -40,11 +38,16 @@ def build_prompt(messages):
 
 def stream_reply(model, device, prompt, max_new_tokens, temperature, top_k):
     idx = torch.tensor([enc.encode_ordinary(prompt)], dtype=torch.long, device=device)
-    for next_id, idx in model.generate(idx, max_new_tokens, temperature, top_k, None):
-        tok = next_id.item()
-        if tok == EOT_ID:
-            break
-        yield enc.decode([tok])
+    gen = model.generate(idx, max_new_tokens, temperature, top_k, None)
+
+    def token_stream():
+        for next_id, _ in gen:
+            tok = next_id.item()
+            if tok == EOT_ID:
+                return
+            yield tok
+
+    yield from decode_stream(token_stream())
 
 
 st.title("boltU chat")
@@ -71,7 +74,12 @@ if "messages" not in st.session_state:
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.markdown(m["content"])
+        if m["role"] == "assistant":
+            # plain text, not markdown -- the model's raw hyphens/numbers would otherwise get
+            # reinterpreted as list syntax, misrepresenting what it actually generated
+            st.text(m["content"])
+        else:
+            st.markdown(m["content"])
 
 if user_input := st.chat_input("Say something..."):
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -82,8 +90,10 @@ if user_input := st.chat_input("Say something..."):
     prompt = build_prompt(st.session_state.messages)
 
     with st.chat_message("assistant"):
-        reply = st.write_stream(
-            stream_reply(model, device, prompt, max_new_tokens, temperature, top_k or None)
-        )
+        placeholder = st.empty()
+        reply = ""
+        for chunk in stream_reply(model, device, prompt, max_new_tokens, temperature, top_k or None):
+            reply += chunk
+            placeholder.text(reply)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})

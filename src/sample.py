@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from model import GPT
 
 enc = tiktoken.get_encoding("gpt2")
+EOT_ID = 50256
 
 
 def load_model(ckpt_path, device):
@@ -24,15 +25,36 @@ def load_model(ckpt_path, device):
     return model, ckpt["config"]
 
 
+def decode_stream(token_ids):
+    """Yield UTF-8-safe decoded text chunks for a stream of token ids. A single BPE token doesn't
+    always align to a full UTF-8 character (multi-byte characters can split across tokens), so
+    decoding tokens one at a time can emit invalid byte sequences -- shows up as U+FFFD ("<27>")."""
+    buffer = b""
+    for tok in token_ids:
+        buffer += enc.decode_single_token_bytes(tok)
+        try:
+            yield buffer.decode("utf-8")
+            buffer = b""
+        except UnicodeDecodeError:
+            continue
+    if buffer:
+        yield buffer.decode("utf-8", errors="replace")
+
+
 def generate(model, prompt, max_new_tokens, temperature, top_k, top_p, device, stream=False):
-    ids = enc.encode_ordinary(prompt)
-    idx = torch.tensor([ids], dtype=torch.long, device=device)
+    idx = torch.tensor([enc.encode_ordinary(prompt)], dtype=torch.long, device=device)
+    gen = model.generate(idx, max_new_tokens, temperature, top_k, top_p)
     out_ids = []
-    for next_id, idx in model.generate(idx, max_new_tokens, temperature, top_k, top_p):
-        tok = next_id.item()
-        out_ids.append(tok)
+
+    def token_stream():
+        for next_id, _ in gen:
+            tok = next_id.item()
+            out_ids.append(tok)
+            yield tok
+
+    for chunk in decode_stream(token_stream()):
         if stream:
-            print(enc.decode([tok]), end="", flush=True)
+            print(chunk, end="", flush=True)
     if stream:
         print()
     return prompt + enc.decode(out_ids)
