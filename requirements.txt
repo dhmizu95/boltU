@@ -7,3 +7,6 @@ tqdm
 gradio
 pyyaml
 kaggle  # 2.x+; auth is a single KAGGLE_API_TOKEN now, not the old username+key pair
+gguf            # for src/export_gguf.py
+transformers    # export_gguf.py: canonical GPT-2 tokenizer only, no model weights used
+accelerate      # required by transformers' GGUF loader (used only to verify exports)

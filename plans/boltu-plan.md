@@ -461,6 +461,17 @@ Judge output on: does it stay on topic for 50+ tokens, is the grammar consistent
 repeat, and does validation loss track train loss (divergence = overfitting; on a 20:1 token/param
 budget you should be nowhere near it).
 
+**Checkpoint format.** Every checkpoint (`ckpt_latest.pt`, `ckpt_best.pt`, `ckpt_step_*.pt`) is a
+`torch.save`'d dict — model weights, optimizer state, scaler state, RNG state, step, and config —
+not a portable inference format. `sample.py`/`app.py` load it with `torch.load(..., weights_only=False)`
+and rebuild the `GPT` class from `ckpt["config"]` before loading `ckpt["model"]`; it's tied to this
+repo's `model.py` architecture, not something another tool can load standalone. It is **not GGUF**
+and this plan has no GGUF export step. If you want to run the model in `llama.cpp` later, that's a
+separate conversion (`llama.cpp`'s converter script, since our architecture matches GPT-2 closely
+enough) — worth noting GGUF's small size comes from **quantization** (storing weights at 4/5/8-bit
+precision, e.g. `Q4_K_M`), a lossy reduction in numeric precision, not file compression; GGUF the
+container format itself applies no compression.
+
 ---
 
 ## 9. Phase 8 — The interface (guideline Step 5, adapted)
