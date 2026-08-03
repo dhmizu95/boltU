@@ -10,6 +10,7 @@ import json
 import multiprocessing as mp
 import os
 import random
+import sys
 
 import numpy as np
 import tiktoken
@@ -142,3 +143,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # HF `datasets` streaming leaves background threads alive that block normal interpreter
+    # exit for many minutes after all work is done (observed: ~20s of real work, ~26min hang).
+    # Force-exit rather than silently burning Kaggle wall-clock budget on nothing.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
