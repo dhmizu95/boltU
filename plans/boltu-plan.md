@@ -465,12 +465,52 @@ budget you should be nowhere near it).
 `torch.save`'d dict — model weights, optimizer state, scaler state, RNG state, step, and config —
 not a portable inference format. `sample.py`/`app.py` load it with `torch.load(..., weights_only=False)`
 and rebuild the `GPT` class from `ckpt["config"]` before loading `ckpt["model"]`; it's tied to this
-repo's `model.py` architecture, not something another tool can load standalone. It is **not GGUF**
-and this plan has no GGUF export step. If you want to run the model in `llama.cpp` later, that's a
-separate conversion (`llama.cpp`'s converter script, since our architecture matches GPT-2 closely
-enough) — worth noting GGUF's small size comes from **quantization** (storing weights at 4/5/8-bit
-precision, e.g. `Q4_K_M`), a lossy reduction in numeric precision, not file compression; GGUF the
-container format itself applies no compression.
+repo's `model.py` architecture, not something another tool can load standalone.
+
+### 8.1 Optional: GGUF export for llama.cpp
+
+`src/export_gguf.py` exports a checkpoint to GGUF (`gpt2` architecture) for `llama.cpp`. GGUF's
+small size normally comes from **quantization** (storing weights at 4/5/8-bit precision, e.g.
+`Q4_K_M`) — a lossy reduction in numeric precision, not file compression; the container format
+itself applies none. This exporter skips quantization: `--dtype f16` (default, GGUF's standard
+"unquantized" size) or `--dtype f32` (bit-exact, 2× the file size).
+
+**Prompt:**
+
+> Write `src/export_gguf.py`: load a boltU checkpoint and export it to GGUF using the `gguf` pip package, targeting llama.cpp's `gpt2` architecture (tensor names `token_embd`, `position_embd`, `output_norm`, `output`, and per-block `attn_norm`/`attn_qkv`/`attn_output`/`ffn_norm`/`ffn_up`/`ffn_down` — get exact names from `gguf.TENSOR_NAMES`, don't guess). Support `--dtype f16` (default) and `f32`. Pull the tokenizer vocab and merges from the canonical `transformers` GPT-2 tokenizer rather than reconstructing them from tiktoken's rank dict.
+
+Two non-obvious traps, found by actually building this rather than assuming it would work:
+
+- **Layout.** Our `attn`/`mlp` projections are `nn.Linear` ((out, in), row-major) — already the
+  layout GGUF/ggml expects. HF's own GPT-2 stores the same weights transposed in a `Conv1D` layer
+  ((in, out)), so *HF-checkpoint* converters transpose before writing. Copying that transpose here
+  would silently produce a file that loads fine and generates fluent-looking garbage. **Don't
+  transpose** when exporting from this repo's `model.py`.
+- **Tokenizer reconstruction.** GGUF needs an ordered `merges` list; `tiktoken`'s `mergeable_ranks`
+  doesn't expose merge order directly, and reconstructing it by hand is a solvable but genuinely
+  tricky BPE-simulation problem — get it subtly wrong and the model degrades invisibly (loads,
+  runs, produces slightly-off text) rather than erroring. Pull the vocab/merges from
+  `transformers`' canonical `gpt2` tokenizer instead (same underlying BPE as tiktoken's `gpt2`
+  encoding, just a well-tested source) and skip the reimplementation entirely.
+
+**Verify before trusting "lossless."** Loading and running is not proof of correctness — a
+transposed tensor loads fine and produces plausible-looking wrong output. Verify by comparing
+outputs against this repo's own `model.py` on the same input, not just checking the file loads:
+
+1. Load the export back (`transformers`' `AutoModelForCausalLM.from_pretrained(dir, gguf_file=...)`
+   works out of the box if `accelerate` is installed — no need to build `llama.cpp` from source).
+2. Run the same prompt through both the reloaded GGUF model and the original checkpoint via
+   `model.py`, and diff the logits (argmax match, cosine similarity, max abs diff).
+3. **Test `--dtype f32` even if you only want f16.** It isolates mapping bugs from precision loss:
+   f32 should land near-exact (cosine similarity ~0.999998, max diff ~0.1, from floating-point
+   non-associativity between the two codebases' attention implementations, nothing more). If f32
+   isn't near-exact, the tensor mapping is wrong — fix that before trusting *any* dtype. f16's
+   larger gap (cosine similarity ~0.999, max diff ~1-2 on an undertrained model) is then legible as
+   pure fp16 rounding, not a bug.
+
+If `llama-cpp-python` fails to build (`CMake Error: CXX compiler not set` — no `g++`, only `gcc`,
+in the environment), the `transformers` GGUF loader above is a full substitute for verification;
+you don't need a working `llama.cpp` build just to confirm the export is correct.
 
 ---
 
@@ -771,6 +811,7 @@ training process.
 - [ ] **P5b+** *(Tier B/C only)* `telemetry.py` logging MFU and `num_alloc_retries`; `expandable_segments` set; DDP `grad_accum // world_size` verified
 - [ ] **P6** *(Tier B/C only)* `session_start.sh` written; checkpoint dataset versioning tested end-to-end; first long batch job completed
 - [ ] **P7** Loss curves plotted; samples read as coherent English
+- [ ] **P7+** *(optional)* GGUF export verified — f32 export near-exact vs `model.py` before trusting f16
 - [ ] **P8** UI streaming from the trained checkpoint
 - [ ] **P9** *(optional)* instruction fine-tune
 
