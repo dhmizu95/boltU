@@ -20,7 +20,7 @@ checkpoints/ (gitignored)
 ## Credentials
 
 ```bash
-cp .env.example .env   # fill in KAGGLE_USERNAME, KAGGLE_KEY, GH_TOKEN
+cp .env.example .env   # fill in KAGGLE_USERNAME, KAGGLE_API_TOKEN, GH_TOKEN
 set -a; source .env; set +a   # export into the shell before running kaggle CLI commands
 ```
 

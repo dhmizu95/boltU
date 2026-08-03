@@ -1,5 +1,5 @@
 {
-  "id": "<kaggle-username>/boltu-train",
+  "id": "delowerhossainmizu/boltu-train",
   "title": "boltu-train",
   "code_file": "run.ipynb",
   "language": "python",
@@ -7,5 +7,5 @@
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
-  "dataset_sources": ["<kaggle-username>/boltu-tokens", "<kaggle-username>/boltu-checkpoints"]
+  "dataset_sources": ["delowerhossainmizu/boltu-tokens", "delowerhossainmizu/boltu-checkpoints"]
 }

@@ -155,13 +155,18 @@ The guideline's Step 1 installs CUDA PyTorch locally. On Kaggle, PyTorch + CUDA 
 ```bash
 pip install kaggle
 # Account → Settings → API → Create New Token, then:
-mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
+export KAGGLE_API_TOKEN=<the token value>
 kaggle kernels list -m          # verify auth
 ```
 
-The token file is the path that reliably works everywhere, including from *inside* a kernel. Inside a
-notebook, never paste the token: use **Kaggle Secrets** (Add-ons → Secrets) and reconstruct
-`~/.kaggle/kaggle.json` at runtime.
+**Verified against the live API (2026-08):** Kaggle CLI 2.x auth is a single bearer token, not the
+classic `username`+`key` pair — the old `~/.kaggle/kaggle.json` **Basic Auth** flow now gets a hard
+`401 {"code":401,"message":"Unauthenticated"}` from the server, confirmed with `curl` directly against
+`api.kaggle.com`, independent of the CLI. The *same* token value works immediately as a Bearer token
+(`kaggle kernels list -m` with `KAGGLE_API_TOKEN` set, or `~/.kaggle/access_token`). If you're on an
+older pinned `kaggle<2`, the Basic Auth path it uses is dead regardless of how correct your credentials
+are — upgrade instead of debugging the credentials. Inside a notebook, never paste the token: use
+**Kaggle Secrets** (Add-ons → Secrets) and read it into the environment at runtime.
 
 ### 3.2 Interactive session (Phases 1–5 development)
 

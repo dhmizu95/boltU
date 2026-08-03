@@ -6,4 +6,4 @@ matplotlib
 tqdm
 gradio
 pyyaml
-kaggle
+kaggle  # 2.x+; auth is a single KAGGLE_API_TOKEN now, not the old username+key pair
