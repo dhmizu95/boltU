@@ -78,7 +78,15 @@ boltU/
 
 > Scaffold a Python project for training a GPT-style language model from scratch. Create this directory structure: configs/, data/, src/, checkpoints/. Add a requirements.txt with torch, tiktoken, datasets, numpy, matplotlib, tqdm, gradio, pyyaml. Add a .gitignore excluding data/, checkpoints/, *.bin, and __pycache__. Create configs/base.yaml with a documented schema covering model dims (n_layer, n_head, n_embd, block_size, vocab_size, dropout) and training params (batch_size, grad_accum_steps, learning_rate, warmup_steps, max_steps, weight_decay, grad_clip, eval_interval, checkpoint_interval). Do not write model or training logic yet — structure and config only.
 
-**Done when:** `tree` shows the structure and `configs/base.yaml` parses with `yaml.safe_load`.
+**Push it to GitHub before Phase 2.** This is the sync channel — Colab pulls the repo, you never
+copy-paste code into cells. A private repo is fine; put the token in a Colab Secret, not inline.
+
+```bash
+gh repo create boltu --private --source=. --remote=origin --push
+```
+
+**Done when:** `tree` shows the structure, `configs/base.yaml` parses with `yaml.safe_load`, and
+the repo is pushed.
 
 ---
 
@@ -91,24 +99,55 @@ The guideline's Step 1 installs CUDA PyTorch locally. On Colab, PyTorch + CUDA a
 `Runtime → Change runtime type → GPU`, then in the first cell:
 
 ```python
+from google.colab import drive, userdata
+drive.mount('/content/drive')
+!mkdir -p /content/drive/MyDrive/boltu/{data,checkpoints,logs}
+
+%cd /content
+![ -d boltU ] || git clone https://{userdata.get('GH_TOKEN')}@github.com/<you>/boltu.git boltU
+%cd /content/boltU
+!git pull --ff-only
+
 !pip install -q tiktoken datasets gradio pyyaml
 import torch, subprocess
 print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))
 print(subprocess.run(["nvidia-smi"], capture_output=True, text=True).stdout)
 ```
 
+Same cell at the top of every notebook. It's idempotent — clone on first run, `git pull` after.
+
 ### Option B — Colab CLI (recommended; keeps your repo as the source of truth)
 
-Google released the official Colab CLI in June 2026 — it connects a local terminal to a remote Colab runtime. Linux/macOS only.
+Google released the official Colab CLI in June 2026 — it connects a local terminal to a remote
+Colab runtime. Package `google-colab-cli`, binary `colab`, Python ≥3.12, **Linux/macOS only**.
+
+**On Windows, this needs WSL2.** There is no native Windows build. One-time cost:
+
+```powershell
+wsl --install -d Ubuntu-24.04    # reboot if this is your first distro
+```
+
+Then, inside WSL:
 
 ```bash
-uv tool install git+https://github.com/googlecolab/google-colab-cli
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install google-colab-cli          # or: pip install google-colab-cli
+
+# Auth is a prerequisite, not optional — the CLI rides on application-default credentials
+gcloud auth application-default login \
+  --scopes=openid,https://www.googleapis.com/auth/cloud-platform,\
+https://www.googleapis.com/auth/userinfo.email,\
+https://www.googleapis.com/auth/colaboratory
+colab --auth=adc whoami
 
 colab new -s boltu --gpu L4            # or T4 / A100 / H100
 colab install -s boltu -r requirements.txt
 colab drivemount -s boltu              # mounts Drive at /content/drive
 echo "import torch; print(torch.cuda.get_device_name(0))" | colab exec -s boltu
 ```
+
+Keep the repo on the Windows side and reach it from WSL at `/mnt/d/...`, or clone it again inside
+the WSL filesystem — the latter is meaningfully faster for git operations.
 
 Core commands you'll use throughout:
 
@@ -121,9 +160,51 @@ Core commands you'll use throughout:
 | `colab log -s NAME -o run.ipynb` | export the session history as a notebook |
 | `colab status` / `colab stop -s NAME` | monitor / release the VM |
 
-The CLI has a built-in keep-alive daemon, which is exactly what you want for long training runs — no browser tab babysitting.
+The CLI has a built-in keep-alive daemon, which is exactly what you want for long training runs — no browser tab babysitting. It removes the ~90 min idle disconnect; it does **not** remove the ~12 h session ceiling, and the VM keep-alive itself caps at 24 h.
 
 These invocations match the published command reference as of this writing, but the tool shipped in June 2026 and flags may shift — `colab <cmd> --help` is authoritative if something errors.
+
+### Option B.1 — `exec` vs `run` vs `console` (read before Phase 5)
+
+The three execution verbs are not interchangeable, and picking the wrong one is the most likely way to waste a session.
+
+| Verb | Signature | Fits |
+|---|---|---|
+| `colab exec` | `exec [-s NAME] [-f FILE] [--output-image PATH]` | short, arg-free snippets against a live session |
+| `colab run` | `run [--gpu GPU] [--keep] SCRIPT [ARGS...]` | one-shot: provision → run → release |
+| `colab console` | `console [-s NAME]` — raw TTY (tmux) | **long training runs** |
+
+Two consequences:
+
+1. **`exec` takes no script arguments.** Look at the signatures: only `run` has `[ARGS...]`. So
+   `colab exec -f src/train.py --config configs/base.yaml` does not do what it reads like — the
+   flags are parsed by `colab`, not forwarded to your script. Either use `colab run` (which
+   forwards, but provisions a *fresh* VM each time), or make `train.py` read its config from an
+   env var / a fixed path, or drive it from `console`.
+2. **Neither `exec` nor `run` is built for multi-hour jobs.** A third-party writeup reports a
+   default 30-second execution timeout on both; that figure is *not* in the official command
+   reference, so treat it as unverified and check `colab exec --help`. Either way, streaming a
+   12-hour job through a synchronous RPC is the wrong shape. Use the TTY:
+
+```bash
+colab console -s boltu
+# ...now inside the VM's tmux session:
+cd /content/boltU && git pull --ff-only
+nohup python src/train.py --config configs/base.yaml --resume > logs/train.out 2>&1 &
+# Ctrl-b d to detach, then Ctrl-d to drop the local TTY. Training keeps running.
+```
+
+Poll it from outside without reattaching:
+
+```bash
+colab download -s boltu boltU/logs/metrics.csv /tmp/metrics.csv
+```
+
+which is exactly what the §11.7 dashboard consumes.
+
+3. **Stop what you provision.** Compute units bill for as long as the VM is alive, and the
+   keep-alive daemon is *designed* to keep it alive. `colab stop -s boltu` is not optional
+   housekeeping.
 
 **On precision:** prefer bf16 wherever it's available. Support starts at Ampere and continues in every later architecture — A100 (Ampere), L4 (Ada Lovelace), and H100 (Hopper) all have it. bf16 shares fp32's exponent range, so it needs no loss scaling and won't silently overflow. T4 (Turing, pre-Ampere) and Kaggle's P100 (Pascal) are the common free-tier GPUs *without* bf16, which is why the fp16 + `GradScaler` path in §5 exists at all.
 
@@ -155,6 +236,11 @@ Tokenize **once**, save as flat `uint16` binary shards, then memory-map them. GP
 Then `src/dataset.py`:
 
 > Write `src/dataset.py` with a `get_batch(split, batch_size, block_size, device)` function that memory-maps the uint16 shards with `np.memmap`, samples random offsets, builds x and y where y is x shifted by one position, and transfers to GPU with `pin_memory()` and `non_blocking=True`. Re-open the memmap each call to avoid a known memory-leak pattern. Include a `__main__` block that prints the shapes and dtypes of one batch.
+
+**Cut the val holdout on document boundaries.** "First shard, capped at 10M tokens" is right in
+spirit, but if you truncate mid-document the val set's final window shares a document with
+`train_0001.bin` — a small, real leak that makes val loss read slightly optimistic. Stop the val
+shard at the last complete document before 10M tokens and start training data at the next one.
 
 ### Persist to Drive
 
@@ -230,12 +316,19 @@ If `max_steps` comes out under ~2000, your `tokens_per_step` is too large for th
 ### Run it
 
 ```bash
-# Smoke test FIRST — 50 steps on the tiny config
-colab exec -s boltu -f src/train.py --config configs/tiny.yaml --max_steps 50
+# Smoke test FIRST — 50 steps on the tiny config.
+# `run` forwards ARGS and tears the VM down after; ideal for a short throwaway check.
+colab run --gpu T4 src/train.py --config configs/tiny.yaml --max_steps 50
 
-# Real run
-colab exec -s boltu -f src/train.py --config configs/base.yaml
+# Real run — detached inside the session's tmux, NOT through exec (see §3, Option B.1)
+colab console -s boltu
+#   cd /content/boltU && git pull --ff-only
+#   nohup python src/train.py --config configs/base.yaml --resume > logs/train.out 2>&1 &
+#   Ctrl-b d, Ctrl-d
 ```
+
+Do not use `colab exec -f src/train.py --config ...` — `exec` has no `[ARGS...]` in its signature,
+so those flags are eaten by the CLI and never reach your script.
 
 Log `grad_norm` (pre-clip) at step 1 and step 50 of the smoke test. If it has exploded past ~5 by step 50, your LR or warmup is wrong — find that out in two minutes, not two days.
 
@@ -259,11 +352,13 @@ Log `grad_norm` (pre-clip) at step 1 and step 50 of the smoke test. If it has ex
 The guideline notes a usable model needs days of training. On Colab that means N sessions, not one. Per-session routine:
 
 1. `colab new -s boltu --gpu L4` and `colab drivemount -s boltu`
-2. Copy data shards Drive → `/content/data/`
-3. Copy `ckpt_latest.pt` Drive → `/content/checkpoints/`
-4. `colab exec -s boltu -f src/train.py --resume`
-5. Let it run; the CLI keep-alive daemon handles idle timeouts
-6. Confirm checkpoints are landing in Drive, then `colab stop -s boltu`
+2. `git pull` the repo on the VM; run `scripts/prune_drive.sh` (fail on quota now, not at hour six)
+3. Copy data shards Drive → `/content/data/`
+4. Copy `ckpt_latest.pt` Drive → `/content/checkpoints/`
+5. `colab console -s boltu`, then `nohup python src/train.py --resume &`, detach
+6. Let it run; the CLI keep-alive daemon handles the idle timeout (not the 12 h cap)
+7. Confirm checkpoints are landing in Drive, then `colab stop -s boltu` — **the keep-alive daemon
+   will otherwise hold the VM and bill compute units after training has finished**
 
 Wrap steps 1–4 in a `scripts/session_start.sh` so restarting is one command — you'll do it a dozen times.
 
@@ -530,9 +625,9 @@ Two T4s give ~1.7–1.8× throughput, not 2×. Worth it only once single-GPU tra
 ## Master checklist
 
 - [ ] **P0** Tier chosen, token budget calculated, `base.yaml` filled in
-- [ ] **P1** Repo scaffolded, config parses
-- [ ] **P2** Colab CLI installed, GPU verified, Drive mounted, bf16 support known
-- [ ] **P3** Data tokenized to uint16 shards, round-trip decode verified, shards backed up to Drive
+- [ ] **P1** Repo scaffolded, config parses, **pushed to GitHub** (the Colab sync channel)
+- [ ] **P2** WSL2 up (Windows only); `colab` installed **and authed** (`colab --auth=adc whoami`); GPU verified; Drive mounted; bf16 support known; `console`-not-`exec` understood for long runs
+- [ ] **P3** Data tokenized to uint16 shards, val holdout cut on document boundaries, round-trip decode verified, shards backed up to Drive
 - [ ] **P4** Model builds, param count matches target, forward pass shape correct
 - [ ] **P5** Smoke test passes; initial loss ≈ 10.8; **kill-and-resume verified**
 - [ ] **P5b** Data in RAM (or memmap justified); sync failures halt training; grad_accum asserted; `telemetry.py` logging MFU and `num_alloc_retries`; `expandable_segments` set
@@ -555,6 +650,8 @@ Two T4s give ~1.7–1.8× throughput, not 2×. Worth it only once single-GPU tra
 | Training pauses periodically | you're checkpointing to Drive synchronously; move it to a background thread |
 | Generation repeats one phrase | undertrained, or temperature too low / top-k too small |
 | Resumed run's loss spikes | optimizer or scheduler state not restored — only model weights were loaded |
+| Script ignores your `--config` / runs the wrong tier | you launched via `colab exec -f`, which forwards no argv — use `colab run` or `console` (§3, Option B.1) |
+| Compute units draining with nothing training | keep-alive daemon holding an idle VM — `colab stop -s boltu` |
 | **Loss looks fine (~3.2) but generations are mush** | see below |
 
 **Diagnosing "good loss, bad output."** This is the most common late-stage confusion, and it's usually not the model. Work through it in this order: (1) does the same prompt with the same seed produce *identical* output? If not, you have a sampler bug. (2) Is temperature ≤0.5 or top-k ≤10? That produces repetitive loops regardless of model quality — try 0.9 / top-k 50. (3) Does the prompt end mid-word or with trailing whitespace? Tokenization boundary artifacts derail generation badly. (4) Is your inference-time tokenizer the *same* encoding used in `data_prep.py`? A mismatch gives fluent-looking nonsense. (5) Only after all four: check tokens seen against the 20:1 budget — at 3.2 loss on a 10× under-trained model, mush is simply the correct output.
