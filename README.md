@@ -17,6 +17,16 @@ src/        data_prep, dataset, model, train, sample, plot_curves, app
 checkpoints/ (gitignored)
 ```
 
+## Credentials
+
+```bash
+cp .env.example .env   # fill in KAGGLE_USERNAME, KAGGLE_KEY, GH_TOKEN
+set -a; source .env; set +a   # export into the shell before running kaggle CLI commands
+```
+
+Also add `GH_TOKEN` as a **Kaggle Secret** (notebook Add-ons → Secrets) — that's what
+`kernel/run.ipynb` reads on Kaggle itself, `.env` is for local use only.
+
 ## Quickstart
 
 ```bash
