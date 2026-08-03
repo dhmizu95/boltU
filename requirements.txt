@@ -1,0 +1,9 @@
+torch
+tiktoken
+datasets
+numpy
+matplotlib
+tqdm
+gradio
+pyyaml
+kaggle

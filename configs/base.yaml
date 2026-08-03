@@ -1,0 +1,39 @@
+# boltU config — Tier A ("learning run")
+# 6 layer / 384 d_model / 6 head, ctx 512, ~30M params, 600M token budget (20x Chinchilla).
+# See plans/boltu-plan.md §1 for the tier table and §6 for how tokens_per_step/max_steps/warmup
+# are derived per tier — change tier by editing this file only, the code never hardcodes these.
+
+# --- model dims ---
+n_layer: 6
+n_head: 6
+n_embd: 384
+block_size: 512          # context length
+vocab_size: 50257         # GPT-2 BPE (tiktoken "gpt2")
+dropout: 0.0              # token budget >> params at 20:1, no overfitting risk
+
+# --- data ---
+dataset_name: "HuggingFaceFW/fineweb-edu"
+dataset_subset: "sample-10BT"
+total_tokens: 600_000_000     # target training token budget for this tier
+val_tokens: 10_000_000        # held-out, capped, cut on a document boundary (not an 80/20 split)
+shard_tokens: 100_000_000     # tokens per .bin shard
+
+# --- training ---
+micro_batch: 32            # per-step batch fed to the model
+tokens_per_step: 131072    # micro_batch * block_size * grad_accum_steps (derived/asserted in train.py)
+learning_rate: 1.0e-3       # peak LR; smaller models (<50M) tolerate a higher LR than the 6e-4 124M default
+min_lr_frac: 0.1            # cosine floor = 10% of peak
+warmup_frac: 0.02           # 2% of max_steps — max_steps/warmup_steps are DERIVED at startup, not hardcoded
+weight_decay: 0.1
+grad_clip: 1.0
+betas: [0.9, 0.95]
+
+# --- schedule / budget ---
+eval_interval: 200
+eval_iters: 50              # batches averaged per validation estimate
+checkpoint_interval: 200
+max_hours: 11.0             # wall-clock self-termination; leaves margin under Kaggle's 12h hard cap
+
+# --- misc ---
+compile: true                # torch.compile; disable with --no-compile if it misbehaves
+seed: 1337
