@@ -168,6 +168,29 @@ older pinned `kaggle<2`, the Basic Auth path it uses is dead regardless of how c
 are — upgrade instead of debugging the credentials. Inside a notebook, never paste the token: use
 **Kaggle Secrets** (Add-ons → Secrets) and read it into the environment at runtime.
 
+**Three secrets, not one.** Every notebook that clones the repo and pushes checkpoints back needs:
+
+| Secret label | Value | Used for |
+|---|---|---|
+| `GH_USERNAME` | your GitHub username | building the clone URL — don't hardcode it in the notebook, a fork/rename breaks silently |
+| `GH_TOKEN` | GitHub PAT, repo scope | `git clone https://{tok}@github.com/{user}/boltu.git` |
+| `KAGGLE_API_TOKEN` | same value as §3.1's local token | lets the kernel call `kaggle datasets version` on *itself*, to push checkpoints back |
+
+```python
+from kaggle_secrets import UserSecretsClient
+secrets = UserSecretsClient()
+gh_user, tok = secrets.get_secret("GH_USERNAME"), secrets.get_secret("GH_TOKEN")
+os.environ["KAGGLE_API_TOKEN"] = secrets.get_secret("KAGGLE_API_TOKEN")
+```
+
+**"Added" is not "attached."** Adding a secret in one notebook's Add-ons → Secrets panel stores it at
+the *account* level, but each individual notebook still needs that secret explicitly checked/attached
+in its own Secrets panel before `get_secret()` can read it. Getting this wrong doesn't fail cleanly —
+observed failure mode, verified against a live run: `get_secret()` on the un-attached label throws
+`ConnectionError: Connection error trying to communicate with service.` wrapping an `HTTPError: 400`,
+which reads like a network problem, not a permissions one. If a secret call fails on a kernel where the
+others succeed, re-check that specific secret's attachment checkbox before debugging anything else.
+
 ### 3.2 Interactive session (Phases 1–5 development)
 
 New Notebook → Settings pane → **Accelerator: GPU T4 ×2**, **Internet: On**. Then in the first cell:
@@ -301,6 +324,23 @@ kaggle datasets version -p ./data -m "v2: 2.5B tokens" --dir-mode zip
 
 At 200 GB of private dataset quota you are not constrained even at Tier C. This is the single biggest
 practical advantage over Colab's 15 GB Drive.
+
+**Run tokenization itself as a detached batch kernel, not locally or interactively.** Tokenization is
+CPU/network-only — running it on Kaggle costs zero GPU quota, and unlike an interactive session it
+survives you closing the laptop. Give it its own directory and its own `kernel-metadata.json` (Kaggle
+reads exactly one `kernel-metadata.json` per `push -p` path, so a second kernel needs a sibling
+directory, e.g. `kernel-prep/` next to `kernel/`, `enable_gpu: false`):
+
+```
+kernel-prep/
+├── kernel-metadata.json   # id: <user>/boltu-prep, code_file: prep.ipynb, enable_gpu: false
+└── prep.ipynb             # clone repo (§3.1 secrets) → data_prep.py → kaggle datasets create/version
+```
+
+The prep notebook's own last cell does the `kaggle datasets create`/`version` push, so the whole
+tokenize-and-publish cycle is one `kaggle kernels push -p ./kernel-prep` — no local tokenization run,
+no manual upload step. Sequencing matters: the training kernel's `dataset_sources` depends on this
+dataset existing, so prep must reach `kaggle kernels status ... COMPLETE` before you push training.
 
 **Done when:** `meta.json` reports your target token count, the round-trip assert passes, the decoded
 sample window reads as natural language, and the dataset is attached to a test kernel and readable at
