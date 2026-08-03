@@ -220,6 +220,11 @@ a clear message. (The UI equivalent of `kernels push` is **Save Version → Save
 `run.ipynb` should stay thin — clone the repo, then call `train.py`. All logic lives in the repo, not
 in the notebook.
 
+**Batch jobs run with your machine off.** They execute server-side, fully detached — push the job,
+close the browser, shut down. Interactive sessions do not: they're tied to your connection and idle out
+shortly after you disconnect. This is why the marathon in §7 is batch-only, and it's a real advantage
+over Colab, where the CLI's keep-alive daemon runs on *your* machine and dies with it.
+
 ### 3.4 Space check at startup
 
 `/kaggle/working` is ~20 GB, and §7 stages a checkpoint zip in it while the checkpoints themselves are
